@@ -11,8 +11,15 @@ const filesSection = document.getElementById('filesSection');
 const fileList = document.getElementById('fileList');
 const fileCount = document.getElementById('fileCount');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
+const passwordDialog = document.getElementById('passwordDialog');
+const passwordInput = document.getElementById('passwordInput');
+const passwordSubmitBtn = document.getElementById('passwordSubmitBtn');
+const passwordCancelBtn = document.getElementById('passwordCancelBtn');
+const passwordError = document.getElementById('passwordError');
 
 let extractedFiles = [];
+let currentFile = null;
+let currentZip = null;
 
 // ファイル選択ボタンのクリックイベント
 selectBtn.addEventListener('click', () => {
@@ -58,54 +65,102 @@ async function handleFile(file) {
     // UI状態のリセット
     hideError();
     hideFiles();
+    hidePasswordDialog();
     showProgress('ZIPファイルを読み込み中...');
 
+    currentFile = file;
+    
+    // まずパスワードなしで試す
+    await extractZip(file, null);
+}
+
+// ZIP解凍処理
+async function extractZip(file, password) {
+    showProgress('解凍中...');
+    
     try {
-        // ZIPファイルの読み込み
-        const arrayBuffer = await file.arrayBuffer();
-        
-        showProgress('解凍中...');
-        
-        // JSZipで解凍
-        const zip = await JSZip.loadAsync(arrayBuffer);
-        
-        extractedFiles = [];
-        const files = [];
-        
-        // すべてのファイルを取得
-        zip.forEach((relativePath, zipEntry) => {
-            if (!zipEntry.dir) {
-                files.push({ path: relativePath, entry: zipEntry });
-            }
+        // zip.jsの設定
+        const blobReader = new zip.BlobReader(file);
+        const zipReader = new zip.ZipReader(blobReader, {
+            password: password
         });
+        
+        // ZIPファイルのエントリを取得
+        const entries = await zipReader.getEntries();
+        
+        if (entries.length === 0) {
+            await zipReader.close();
+            throw new Error('ZIPファイルにファイルが含まれていません');
+        }
 
-        // プログレスバー更新のための処理
+        extractedFiles = [];
         let processed = 0;
-        for (const fileData of files) {
-            const { path, entry } = fileData;
-            
-            // ファイルの内容を取得
-            const blob = await entry.async('blob');
-            
-            extractedFiles.push({
-                name: path,
-                size: blob.size,
-                blob: blob
-            });
+        let encryptedDetected = false;
 
-            processed++;
-            const progress = (processed / files.length) * 100;
-            updateProgress(progress, `解凍中... (${processed}/${files.length})`);
+        // すべてのファイルを解凍
+        for (const entry of entries) {
+            if (!entry.directory) {
+                try {
+                    // ファイルの内容を取得
+                    const blobWriter = new zip.BlobWriter();
+                    const blob = await entry.getData(blobWriter);
+                    
+                    extractedFiles.push({
+                        name: entry.filename,
+                        size: blob.size,
+                        blob: blob
+                    });
+
+                    processed++;
+                    const progress = (processed / entries.filter(e => !e.directory).length) * 100;
+                    updateProgress(progress, `解凍中... (${processed}/${entries.filter(e => !e.directory).length})`);
+                } catch (err) {
+                    // 暗号化エラーをチェック
+                    console.error('ファイル解凍エラー:', err);
+                    await zipReader.close();
+                    
+                    if (!password && entry.encrypted) {
+                        // パスワードが必要
+                        encryptedDetected = true;
+                        break;
+                    } else {
+                        // パスワードが間違っている
+                        throw new Error('incorrect password');
+                    }
+                }
+            }
+        }
+
+        await zipReader.close();
+
+        if (encryptedDetected) {
+            hideProgress();
+            showPasswordDialog();
+            return;
         }
 
         // 解凍完了
         hideProgress();
+        hidePasswordDialog();
         displayFiles();
         
     } catch (error) {
-        console.error('解凍エラー:', error);
+        console.error('ZIP解凍エラー:', error);
         hideProgress();
-        showError('ZIPファイルの解凍に失敗しました: ' + error.message);
+        
+        // エラーメッセージを確認
+        const errorMessage = error.message ? error.message.toLowerCase() : '';
+        
+        if (!password && (errorMessage.includes('encrypted') || errorMessage.includes('password'))) {
+            // パスワードが必要
+            showPasswordDialog();
+        } else if (password && (errorMessage.includes('password') || errorMessage.includes('incorrect'))) {
+            // パスワードが間違っている
+            showPasswordDialog();
+            showPasswordError('パスワードが正しくありません');
+        } else {
+            showError('ZIPファイルの解凍に失敗しました: ' + error.message);
+        }
     }
 }
 
@@ -141,6 +196,32 @@ function hideError() {
 // ファイルリストの非表示
 function hideFiles() {
     filesSection.style.display = 'none';
+}
+
+// パスワードダイアログの表示
+function showPasswordDialog() {
+    passwordDialog.style.display = 'flex';
+    passwordInput.value = '';
+    passwordInput.focus();
+    hidePasswordError();
+}
+
+// パスワードダイアログの非表示
+function hidePasswordDialog() {
+    passwordDialog.style.display = 'none';
+    passwordInput.value = '';
+    hidePasswordError();
+}
+
+// パスワードエラーの表示
+function showPasswordError(message) {
+    passwordError.textContent = message;
+    passwordError.style.display = 'block';
+}
+
+// パスワードエラーの非表示
+function hidePasswordError() {
+    passwordError.style.display = 'none';
 }
 
 // ファイルリストの表示
@@ -238,19 +319,19 @@ downloadAllBtn.addEventListener('click', async () => {
     showProgress('ZIPファイルを作成中...');
 
     try {
-        const zip = new JSZip();
+        // zip.jsを使用してZIPファイルを作成
+        const blobWriter = new zip.BlobWriter('application/zip');
+        const zipWriter = new zip.ZipWriter(blobWriter);
 
-        extractedFiles.forEach(file => {
-            zip.file(file.name, file.blob);
-        });
+        let processed = 0;
+        for (const file of extractedFiles) {
+            await zipWriter.add(file.name, new zip.BlobReader(file.blob));
+            processed++;
+            const progress = (processed / extractedFiles.length) * 100;
+            updateProgress(progress, `ZIPファイルを作成中... (${progress.toFixed(0)}%)`);
+        }
 
-        const blob = await zip.generateAsync(
-            { type: 'blob' },
-            (metadata) => {
-                const progress = metadata.percent;
-                updateProgress(progress, `ZIPファイルを作成中... (${progress.toFixed(0)}%)`);
-            }
-        );
+        const blob = await zipWriter.close();
 
         hideProgress();
 
@@ -267,5 +348,51 @@ downloadAllBtn.addEventListener('click', async () => {
         console.error('ZIP作成エラー:', error);
         hideProgress();
         showError('ZIPファイルの作成に失敗しました');
+    }
+});
+
+// パスワード送信ボタンのイベント
+passwordSubmitBtn.addEventListener('click', async () => {
+    const password = passwordInput.value;
+    
+    if (!password) {
+        showPasswordError('パスワードを入力してください');
+        return;
+    }
+    
+    hidePasswordError();
+    hidePasswordDialog();
+    
+    try {
+        await extractZip(currentFile, password);
+    } catch (error) {
+        console.error('パスワード解凍エラー:', error);
+        hideProgress();
+        
+        if (error.message && (
+            error.message.includes('Encrypted') || 
+            error.message.includes('password') ||
+            error.message.includes('incorrect') ||
+            error.message.includes('invalid')
+        )) {
+            showPasswordDialog();
+            showPasswordError('パスワードが正しくありません');
+        } else {
+            showError('ZIPファイルの解凍に失敗しました: ' + error.message);
+        }
+    }
+});
+
+// パスワードキャンセルボタンのイベント
+passwordCancelBtn.addEventListener('click', () => {
+    hidePasswordDialog();
+    currentFile = null;
+    currentZip = null;
+});
+
+// パスワード入力でEnterキーを押した時
+passwordInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        passwordSubmitBtn.click();
     }
 });

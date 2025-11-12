@@ -42,6 +42,19 @@
                 </div>
             </div>
 
+            <div class="password-dialog" id="passwordDialog" style="display: none;">
+                <div class="password-content">
+                    <h3>🔐 パスワード入力</h3>
+                    <p>このZIPファイルは暗号化されています。パスワードを入力してください。</p>
+                    <input type="password" id="passwordInput" placeholder="パスワードを入力" autocomplete="off">
+                    <div class="password-buttons">
+                        <button class="btn-select" id="passwordSubmitBtn">解凍</button>
+                        <button class="btn-secondary" id="passwordCancelBtn">キャンセル</button>
+                    </div>
+                    <div class="password-error" id="passwordError" style="display: none;"></div>
+                </div>
+            </div>
+
             <div class="files-section" id="filesSection" style="display: none;">
                 <h2>📁 解凍されたファイル</h2>
                 <div class="toolbar">
@@ -58,8 +71,8 @@
         </footer>
     </div>
 
-    <!-- JSZip ライブラリ -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- zip.js ライブラリ (暗号化ZIP対応) -->
+    <script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.34/dist/zip.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
