@@ -107,28 +107,65 @@ async function extractZip(file, password) {
                     // ファイル名のデコード処理
                     let filename = entry.filename;
                     
-                    // UTF-8フラグがない場合、Shift_JIS(CP932)として扱う可能性がある
+                    // UTF-8フラグがない場合、複数のエンコーディングを試してデコード
                     if (!entry.filenameUTF8 && entry.rawFilename) {
                         try {
-                            // rawFilenameからShift_JISデコードを試みる
-                            const rawBytes = new Uint8Array(entry.rawFilename);
-                            
-                            // Encoding.jsを使用してShift_JISからUnicodeに変換
-                            const unicodeArray = Encoding.convert(rawBytes, {
-                                to: 'UNICODE',
-                                from: 'SJIS'
-                            });
-                            
-                            // UnicodeをStringに変換
-                            const decodedName = Encoding.codeToString(unicodeArray);
-                            
-                            // 変換が成功したか確認（文字化けチェック）
-                            if (decodedName && !decodedName.includes('�') && decodedName.length > 0) {
-                                filename = decodedName;
+                            // rawFilename を Uint8Array に変換
+                            let rawBytes = entry.rawFilename;
+                            if (!(rawBytes instanceof Uint8Array)) {
+                                rawBytes = new Uint8Array(rawBytes);
+                            }
+
+                            // デバッグ用にログ出力（開発時のみ）
+                            console.debug('Entry filename raw bytes:', rawBytes);
+                            console.debug('entry.filename:', entry.filename, 'filenameUTF8:', entry.filenameUTF8);
+
+                            // Encoding.detect を使って候補を取得
+                            let detected = null;
+                            try {
+                                detected = Encoding.detect(rawBytes);
+                                console.debug('Encoding.detect ->', detected);
+                            } catch (dErr) {
+                                console.debug('Encoding.detect failed:', dErr);
+                            }
+
+                            const tryEncodings = [];
+                            if (detected) tryEncodings.push(detected);
+                            // 優先度の高い候補を追加
+                            tryEncodings.push('SJIS', 'CP932', 'UTF8', 'CP437');
+
+                            let best = null;
+                            for (const enc of tryEncodings) {
+                                try {
+                                    const unicodeArray = Encoding.convert(rawBytes, { to: 'UNICODE', from: enc });
+                                    const decoded = Encoding.codeToString(unicodeArray);
+
+                                    // いくつかのチェックを行う
+                                    const hasReplacement = decoded.includes('�');
+                                    const hasJapanese = /[\u3000-\u30FF\u4E00-\u9FFF]/.test(decoded);
+
+                                    console.debug(`try enc=${enc} ->`, decoded, 'hasReplacement=', hasReplacement, 'hasJapanese=', hasJapanese);
+
+                                    // 日本語文字が含まれ、置換文字がない場合は最良候補とする
+                                    if (hasJapanese && !hasReplacement) {
+                                        best = decoded;
+                                        break;
+                                    }
+
+                                    // 置換文字がない候補を一時的に保存
+                                    if (!hasReplacement && !best) {
+                                        best = decoded;
+                                    }
+                                } catch (innerErr) {
+                                    console.debug('decoding failed for', enc, innerErr);
+                                }
+                            }
+
+                            if (best) {
+                                filename = best;
                             }
                         } catch (decodeError) {
-                            // デコード失敗時は元のファイル名を使用
-                            console.warn('ファイル名のShift_JISデコードに失敗:', decodeError);
+                            console.warn('ファイル名デコードに失敗:', decodeError);
                         }
                     }
                     
