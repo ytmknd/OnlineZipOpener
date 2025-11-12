@@ -82,7 +82,10 @@ async function extractZip(file, password) {
         // zip.jsの設定
         const blobReader = new zip.BlobReader(file);
         const zipReader = new zip.ZipReader(blobReader, {
-            password: password
+            password: password,
+            // 日本語ファイル名対応: UTF-8とShift_JISの両方をサポート
+            filenameEncoding: 'cp437',
+            useWebWorkers: false
         });
         
         // ZIPファイルのエントリを取得
@@ -101,12 +104,40 @@ async function extractZip(file, password) {
         for (const entry of entries) {
             if (!entry.directory) {
                 try {
+                    // ファイル名のデコード処理
+                    let filename = entry.filename;
+                    
+                    // UTF-8フラグがない場合、Shift_JIS(CP932)として扱う可能性がある
+                    if (!entry.filenameUTF8 && entry.rawFilename) {
+                        try {
+                            // rawFilenameからShift_JISデコードを試みる
+                            const rawBytes = new Uint8Array(entry.rawFilename);
+                            
+                            // Encoding.jsを使用してShift_JISからUnicodeに変換
+                            const unicodeArray = Encoding.convert(rawBytes, {
+                                to: 'UNICODE',
+                                from: 'SJIS'
+                            });
+                            
+                            // UnicodeをStringに変換
+                            const decodedName = Encoding.codeToString(unicodeArray);
+                            
+                            // 変換が成功したか確認（文字化けチェック）
+                            if (decodedName && !decodedName.includes('�') && decodedName.length > 0) {
+                                filename = decodedName;
+                            }
+                        } catch (decodeError) {
+                            // デコード失敗時は元のファイル名を使用
+                            console.warn('ファイル名のShift_JISデコードに失敗:', decodeError);
+                        }
+                    }
+                    
                     // ファイルの内容を取得
                     const blobWriter = new zip.BlobWriter();
                     const blob = await entry.getData(blobWriter);
                     
                     extractedFiles.push({
-                        name: entry.filename,
+                        name: filename,
                         size: blob.size,
                         blob: blob
                     });
